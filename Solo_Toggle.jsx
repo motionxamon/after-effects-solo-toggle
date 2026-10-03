@@ -1,0 +1,114 @@
+/** Solo Toggle 1.2 — isolate / restore selected layers in viewer AND timeline.
+ * State lives in the composition comment, so reruns, Undo and project reloads agree.
+ * Requires After Effects 22.0+ (persistent layer IDs). No panel or file permissions.
+ */
+(function () {
+    var TAG = "\n[[SoloToggle:v2:";
+
+    function savedState(comp) {
+        var comment = comp.comment || "";
+        var pattern = /\n\[\[SoloToggle:v([12]):([^\]\r\n]*)\]\]/g;
+        var match = pattern.exec(comment);
+        if (!match) {
+            if (comment.indexOf("[[SoloToggle:") >= 0) throw new Error("Повреждены данные Solo Toggle в комментарии композиции. Используйте Undo.");
+            return null;
+        }
+        if (pattern.exec(comment)) throw new Error("Найдено несколько сохранённых состояний Solo Toggle. Используйте Undo.");
+        var version = Number(match[1]), parts = match[2].split(";");
+        if (parts[0] !== String(comp.id)) throw new Error("Композиция скопирована или импортирована в режиме изоляции. Сохранённое состояние относится к другой композиции.");
+        var first = version === 2 ? 2 : 1, layers = {};
+        if (version === 2 && !/^[01]$/.test(parts[1])) throw new Error("Повреждено состояние Hide Shy Layers. Используйте Undo.");
+        for (var i = first; i < parts.length; i++) {
+            var row = parts[i].split(",");
+            if (row.length !== (version === 2 ? 4 : 3) || !/^\d+$/.test(row[0]) ||
+                !/^[01]$/.test(row[1]) || !/^[01]$/.test(row[2]) ||
+                (version === 2 && !/^[01]$/.test(row[3])) || layers["id" + row[0]])
+                throw new Error("Повреждены данные слоёв Solo Toggle. Используйте Undo.");
+            layers["id" + row[0]] = {enabled:row[1] === "1", solo:row[2] === "1",
+                shy:version === 2 ? row[3] === "1" : undefined};
+        }
+        return {comment:comment.substring(0, match.index) + comment.substring(match.index + match[0].length),
+            layers:layers, hideShyLayers:version === 2 ? parts[1] === "1" : undefined};
+    }
+
+    function switches(layer, enabled, solo, shy) {
+        var locked = layer.locked;
+        try {
+            if (locked) layer.locked = false;
+            // AE rejects any Solo assignment on a disabled layer, even solo=false.
+            // Do not touch an unchanged Solo switch; enable first when it must change.
+            if (layer.solo !== solo) {
+                if (!layer.enabled) layer.enabled = true;
+                layer.solo = solo;
+            }
+            if (layer.enabled !== enabled) layer.enabled = enabled;
+            if (shy !== undefined && layer.shy !== shy) layer.shy = shy;
+        } finally {
+            layer.locked = locked;
+        }
+    }
+
+    var comp = app.project && app.project.activeItem;
+    if (!(comp instanceof CompItem)) {
+        alert("Solo Toggle: откройте композицию и выделите слои."); return;
+    }
+    var saved;
+    try { saved = savedState(comp); }
+    catch (stateError) { alert("Solo Toggle: " + stateError.message); return; }
+    var selected = comp.selectedLayers, selectedIds = {}, i;
+    // Restoring works with any selection, including no selected layers.
+    if (!saved && !selected.length) {
+        alert("Solo Toggle: выделите слои, которые нужно оставить видимыми."); return;
+    }
+    for (i = 0; i < selected.length; i++) selectedIds["id" + selected[i].id] = true;
+
+    var snapshot = [], applied = [], oldComment = comp.comment || "", oldHide = comp.hideShyLayers;
+    var payload = [String(comp.id), oldHide ? "1" : "0"];
+    for (i = 1; i <= comp.numLayers; i++) {
+        var layer = comp.layer(i);
+        if (typeof layer.id !== "number") {
+            alert("Solo Toggle: требуется After Effects 22.0 или новее."); return;
+        }
+        snapshot.push({layer:layer, enabled:layer.enabled, solo:layer.solo, shy:layer.shy});
+        payload.push(layer.id + "," + (layer.enabled ? "1" : "0") + "," + (layer.solo ? "1" : "0") + "," + (layer.shy ? "1" : "0"));
+    }
+
+    app.beginUndoGroup(saved ? "Solo Toggle — Restore" : "Solo Toggle — Isolate");
+    try {
+        // Persist first so a later run can recover even if a layer rejects a switch.
+        if (!saved) comp.comment = oldComment + TAG + payload.join(";") + "]]";
+        comp.hideShyLayers = false;
+        for (i = 0; i < snapshot.length; i++) {
+            var current = snapshot[i].layer, previous = saved && saved.layers["id" + current.id];
+            if (saved) {
+                // Deleted layers are ignored; layers added while isolated retain their switches.
+                if (previous) {
+                    applied.push(snapshot[i]);
+                    switches(current, previous.enabled, previous.solo, previous.shy);
+                }
+            } else {
+                // Clear native Solo so only the requested selection determines visibility.
+                applied.push(snapshot[i]);
+                var keep = !!selectedIds["id" + current.id];
+                switches(current, keep, false, !keep);
+            }
+        }
+        comp.hideShyLayers = saved ? (saved.hideShyLayers === undefined ? oldHide : saved.hideShyLayers) : true;
+        if (saved) comp.comment = saved.comment;
+    } catch (error) {
+        var rollbackErrors = [];
+        for (i = applied.length - 1; i >= 0; i--) {
+            try { switches(applied[i].layer, applied[i].enabled, applied[i].solo, applied[i].shy); }
+            catch (restoreError) { rollbackErrors.push(restoreError.toString()); }
+        }
+        try { comp.hideShyLayers = oldHide; }
+        catch (hideError) { rollbackErrors.push(hideError.toString()); }
+        try { comp.comment = oldComment; }
+        catch (commentError) { rollbackErrors.push(commentError.toString()); }
+        alert("Solo Toggle: " + error.toString() +
+            (rollbackErrors.length ? "\nНе удалось полностью восстановить состояние. Используйте Undo.\n" +
+                "Ошибок восстановления: " + rollbackErrors.length + "." : ""));
+    } finally {
+        app.endUndoGroup();
+    }
+})();
