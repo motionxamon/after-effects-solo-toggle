@@ -1,6 +1,11 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const path=require('path');
-const code=fs.readFileSync(path.join(__dirname,'..','Solo_Toggle.jsx'),'utf8');new vm.Script(code);
+const distribution=process.argv[2] || 'Solo_Toggle.jsx';
+let code=fs.readFileSync(path.join(__dirname,'..',distribution),'utf8');new vm.Script(code);
+if(distribution==='Solo_Toggle_Panel.jsx') {
+ const start=code.indexOf('/* CORE START */')+'/* CORE START */'.length,end=code.indexOf('/* CORE END */');
+ code='(function(){\n'+code.slice(start,end)+'\n})();';
+}
 class CompItem{constructor(id,layers){this.id=id;this.layers=layers;this.comment='User notes\nKeep this';this.selectedLayers=[];this.hideShyLayers=false;}get numLayers(){return this.layers.length;}layer(i){return this.layers[i-1];}}
 function layer(id,enabled=true,solo=false,locked=false,shy=false){let e=enabled,s=solo,h=shy;return {id,locked,get shy(){return h;},set shy(v){if(this.locked)throw Error('locked');if(this.failShy){this.failShy=false;throw Error('Shy switch failed');}h=v;},get enabled(){return e;},set enabled(v){if(this.locked)throw Error('locked');if(this.failOnce){this.failOnce=false;throw Error('switch failed');}e=v;},get solo(){return s;},set solo(v){if(this.locked)throw Error('locked');if(!e)throw Error('Solo flag can not be set on a layer if the layer is not enabled.');s=v;}};}
 let alerts=[],undos=0;const comp=new CompItem(100,[layer(1,true,true),layer(2,false,false,true),layer(3,true,false,true)]);

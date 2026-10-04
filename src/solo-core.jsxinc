@@ -1,5 +1,3 @@
-/** Solo Toggle 1.3 — AE 22.0+. Independent single-file distribution. */
-(function () {
     var TAG = "\n[[SoloToggle:v2:";
 
     function savedState(comp) {
@@ -108,4 +106,3 @@
     } finally {
         app.endUndoGroup();
     }
-})();
